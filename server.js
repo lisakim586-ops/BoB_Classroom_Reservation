@@ -33,12 +33,15 @@ const DB_FILE = path.join(DATA_DIR, 'db.json');
 function ensureDb() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(DB_FILE)) {
-    fs.writeFileSync(DB_FILE, JSON.stringify({ reservations: [], cancellations: [] }, null, 2));
+    fs.writeFileSync(DB_FILE, JSON.stringify({ reservations: [], cancellations: [], blockedDates: [] }, null, 2));
   }
 }
 function readDb() {
   ensureDb();
-  return JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
+  const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
+  // 기존에 배포된 db.json에는 blockedDates가 없을 수 있으므로 없으면 채워준다
+  if (!Array.isArray(db.blockedDates)) db.blockedDates = [];
+  return db;
 }
 function writeDb(db) {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
@@ -162,6 +165,7 @@ app.get('/api/reservations', (req, res) => {
       bookingFloor: bookingFloorStr(),
       bookingHorizonEnd: bookingHorizonEndStr(),
       today: todayStr(),
+      blockedDates: db.blockedDates,
     },
   });
 });
@@ -192,6 +196,9 @@ app.post('/api/reservations', async (req, res) => {
     const result = await withDb((db) => {
       if (findReservation(db.reservations, date, room, slotIndex)) {
         return { error: '이미 예약된 시간이에요. 새로고침 후 다시 시도해주세요.', status: 409 };
+      }
+      if (db.blockedDates.includes(date)) {
+        return { error: '운영진이 예약을 막아둔 날짜예요. 다른 날짜를 선택해주세요.', status: 403 };
       }
 
       const trimmedTeam = team ? String(team).trim() : '';
@@ -400,12 +407,107 @@ app.post('/api/export.csv', (req, res) => {
   res.send('\uFEFF' + csvContent);
 });
 
+// ---------- admin routes (모두 운영진 비밀번호 필요) ----------
+
+function checkAdmin(req, res) {
+  const passcode = req.body?.adminPasscode || req.query?.adminPasscode;
+  if (passcode !== ADMIN_PASSCODE) {
+    res.status(401).json({ error: '운영진 비밀번호가 일치하지 않아요.' });
+    return false;
+  }
+  return true;
+}
+
+// 운영진 로그인 확인용 (관리자 화면 진입 시 비밀번호 검증만 하는 용도)
+app.post('/api/admin/login', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  res.json({ ok: true });
+});
+
+// 관리자용: 연락처 포함 전체 예약 목록
+app.post('/api/admin/reservations', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  const db = readDb();
+  const sorted = [...db.reservations].sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    if (a.slotIndex !== b.slotIndex) return a.slotIndex - b.slotIndex;
+    return a.room < b.room ? -1 : 1;
+  });
+  res.json({
+    reservations: sorted.map(({ pin, ...rest }) => rest), // pin은 관리자 화면에도 노출하지 않음
+    meta: { rooms: ROOMS, slots: SLOTS, today: todayStr(), blockedDates: db.blockedDates },
+  });
+});
+
+// 관리자용: 예약 강제 삭제 (취소·노쇼 이력을 남기지 않는 단순 정정용 — 실수로 잘못 들어간 예약 정리 등)
+app.post('/api/admin/reservations/:id/delete', async (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  const { id } = req.params;
+  try {
+    const result = await withDb((db) => {
+      const before = db.reservations.length;
+      db.reservations = db.reservations.filter((r) => r.id !== id);
+      if (db.reservations.length === before) return { error: '이미 삭제된 예약이에요.', status: 404 };
+      return { ok: true };
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: '서버 오류가 발생했어요. 다시 시도해주세요.' });
+  }
+});
+
+// 예약 불가 날짜 목록 조회 (공개 — 예약판에서 흐리게 표시하기 위해 필요)
+app.get('/api/blocked-dates', (req, res) => {
+  const db = readDb();
+  res.json({ blockedDates: db.blockedDates });
+});
+
+// 관리자용: 예약 불가 날짜 추가/해제
+app.post('/api/admin/blocked-dates', async (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  const { date, action } = req.body || {};
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: '날짜 형식이 올바르지 않아요 (YYYY-MM-DD).' });
+  }
+  if (!['add', 'remove'].includes(action)) {
+    return res.status(400).json({ error: 'action은 add 또는 remove여야 해요.' });
+  }
+
+  try {
+    const result = await withDb((db) => {
+      if (action === 'add') {
+        if (!db.blockedDates.includes(date)) db.blockedDates.push(date);
+        db.blockedDates.sort();
+      } else {
+        db.blockedDates = db.blockedDates.filter((d) => d !== date);
+      }
+      return { blockedDates: db.blockedDates };
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: '서버 오류가 발생했어요. 다시 시도해주세요.' });
+  }
+});
+
 // health check
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+// HTML 페이지는 항상 최신 버전을 받도록 캐시를 막는다
+// (브라우저가 옛날 라우팅 결과를 캐싱해서 새 페이지가 안 보이는 문제를 방지)
+function noCache(req, res, next) {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+}
+
 // static frontend
-app.use(express.static(path.join(__dirname, 'public')));
-app.get('*', (req, res) => {
+app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false }));
+app.get('/admin', noCache, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+app.get('*', noCache, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

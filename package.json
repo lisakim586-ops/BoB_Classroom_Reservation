@@ -1,0 +1,15 @@
+{
+  "name": "bob-room-booking-backend",
+  "version": "1.0.0",
+  "description": "BoB 15기 강의실 예약 시스템 백엔드 (Express + JSON 파일 저장소)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

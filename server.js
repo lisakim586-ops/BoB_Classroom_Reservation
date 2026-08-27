@@ -57,14 +57,25 @@ function withDb(mutator) {
 }
 
 // ---------- date helpers ----------
+// Railway 서버는 보통 UTC로 도는데, 예약 시스템은 한국(KST, UTC+9) 기준으로 "오늘"을 판단해야 함.
+// new Date(dateStr + 'T00:00:00')로 파싱한 뒤 toISOString()으로 되돌리면 서버 타임존에 따라
+// 하루씩 밀리는 버그가 생기므로, 모든 날짜 연산은 UTC로 명시적으로 고정해서 처리한다.
+
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const kstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000); // UTC -> KST 보정
+  return kstNow.toISOString().slice(0, 10);
 }
+
+function addDaysToDateStr(dateStr, delta) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + delta);
+  return dt.toISOString().slice(0, 10);
+}
+
 function bookingHorizonEndStr() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + BOOKING_HORIZON_DAYS);
-  return d.toISOString().slice(0, 10);
+  return addDaysToDateStr(todayStr(), BOOKING_HORIZON_DAYS);
 }
 function bookingFloorStr() {
   const today = todayStr();
@@ -77,26 +88,47 @@ function isSameDay(dateStr) {
   return dateStr === todayStr();
 }
 function getWeekStartStr(dateStr) {
-  const d = new Date(`${dateStr}T00:00:00`);
-  const dow = d.getDay();
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = dt.getUTCDay();
   const diffToMonday = dow === 0 ? -6 : 1 - dow;
-  d.setDate(d.getDate() + diffToMonday);
-  return d.toISOString().slice(0, 10);
+  dt.setUTCDate(dt.getUTCDate() + diffToMonday);
+  return dt.toISOString().slice(0, 10);
 }
 
 // ---------- business rules ----------
+// 팀명 비교는 앞뒤 공백·대소문자·중간 공백 차이를 모두 무시하고 같은 팀으로 인식한다
+// (예: "비오비 화이팅", "비오비화이팅", "  비오비  화이팅 " 모두 동일 팀으로 취급)
+function normalizeTeamName(team) {
+  return String(team || '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
+// PM 연락처 비교는 하이픈·공백 등 구분자 차이를 무시하고 숫자만 비교한다
+function normalizePhone(contact) {
+  return String(contact || '').replace(/[^0-9]/g, '');
+}
+
+// 같은 팀이 이미 등록해둔 PM 연락처를 찾는다 (있으면 이후 예약은 그 번호와 일치해야 함)
+function findTeamRegisteredContact(reservations, team, excludeId) {
+  const normalized = normalizeTeamName(team);
+  const match = reservations.find(
+    (r) => r.id !== excludeId && r.contact && normalizeTeamName(r.team) === normalized
+  );
+  return match ? match.contact : null;
+}
+
 function countTeamReservationsInWeek(reservations, team, dateStr) {
   const weekStart = getWeekStartStr(dateStr);
-  const normalized = team.trim().toLowerCase();
+  const normalized = normalizeTeamName(team);
   return reservations.filter(
-    (r) => r.team && r.team.trim().toLowerCase() === normalized && getWeekStartStr(r.date) === weekStart
+    (r) => r.team && normalizeTeamName(r.team) === normalized && getWeekStartStr(r.date) === weekStart
   ).length;
 }
 
 function getTeamBanInfo(cancellations, team) {
-  const normalized = team.trim().toLowerCase();
+  const normalized = normalizeTeamName(team);
   const events = cancellations
-    .filter((c) => c.team && c.team.trim().toLowerCase() === normalized)
+    .filter((c) => c.team && normalizeTeamName(c.team) === normalized)
     .sort((a, b) => new Date(a.cancelledAt) - new Date(b.cancelledAt));
 
   if (events.length < BAN_TRIGGER_COUNT) return { banned: false };
@@ -113,10 +145,17 @@ function findReservation(reservations, date, room, slotIndex) {
 // ---------- routes ----------
 
 // list all reservations (board + calendar + client-side rendering use this)
+function sanitizeForPublic(reservation) {
+  // pin과 연락처는 조회 응답에 포함하지 않음 — 비밀번호가 그대로 노출되면
+  // 취소·수정 보호 기능이 무의미해지고, 연락처도 공개 게시판에 노출하지 않기로 함
+  const { pin, contact, ...rest } = reservation;
+  return rest;
+}
+
 app.get('/api/reservations', (req, res) => {
   const db = readDb();
   res.json({
-    reservations: db.reservations,
+    reservations: db.reservations.map(sanitizeForPublic),
     meta: {
       rooms: ROOMS,
       slots: SLOTS,
@@ -137,6 +176,9 @@ app.post('/api/reservations', async (req, res) => {
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: '사용자 이름을 입력해주세요.' });
   }
+  if (!contact || !String(contact).trim()) {
+    return res.status(400).json({ error: 'PM 연락처를 입력해주세요.' });
+  }
   if (!/^\d{4}$/.test(pin || '')) {
     return res.status(400).json({ error: '비밀번호 4자리를 숫자로 입력해주세요.' });
   }
@@ -153,6 +195,8 @@ app.post('/api/reservations', async (req, res) => {
       }
 
       const trimmedTeam = team ? String(team).trim() : '';
+      const trimmedContact = String(contact).trim();
+
       if (trimmedTeam) {
         const banInfo = getTeamBanInfo(db.cancellations, trimmedTeam);
         if (banInfo.banned) {
@@ -168,6 +212,15 @@ app.post('/api/reservations', async (req, res) => {
             status: 403,
           };
         }
+
+        // PM 연락처는 팀마다 고정이어야 하므로, 그 팀이 이전에 등록한 연락처와 일치하는지 이중 확인한다
+        const registeredContact = findTeamRegisteredContact(db.reservations, trimmedTeam, null);
+        if (registeredContact && normalizePhone(registeredContact) !== normalizePhone(trimmedContact)) {
+          return {
+            error: `'${trimmedTeam}' 팀에 등록된 PM 연락처와 일치하지 않아요. 이전에 입력한 연락처를 다시 확인해주세요.`,
+            status: 400,
+          };
+        }
       }
 
       const reservation = {
@@ -177,7 +230,7 @@ app.post('/api/reservations', async (req, res) => {
         slotIndex,
         name: String(name).trim(),
         team: trimmedTeam,
-        contact: contact ? String(contact).trim() : '',
+        contact: trimmedContact,
         pin: String(pin),
         createdAt: new Date().toISOString(),
       };
@@ -197,15 +250,32 @@ app.put('/api/reservations/:id', async (req, res) => {
   const { id } = req.params;
   const { name, team, contact, pin } = req.body || {};
 
+  if (!contact || !String(contact).trim()) {
+    return res.status(400).json({ error: 'PM 연락처를 입력해주세요.' });
+  }
+
   try {
     const result = await withDb((db) => {
       const target = db.reservations.find((r) => r.id === id);
       if (!target) return { error: '이미 삭제된 예약이에요.', status: 404 };
       if (pin !== target.pin) return { error: '비밀번호가 일치하지 않아요.', status: 403 };
 
+      const trimmedTeam = team ? String(team).trim() : '';
+      const trimmedContact = String(contact).trim();
+
+      if (trimmedTeam) {
+        const registeredContact = findTeamRegisteredContact(db.reservations, trimmedTeam, id);
+        if (registeredContact && normalizePhone(registeredContact) !== normalizePhone(trimmedContact)) {
+          return {
+            error: `'${trimmedTeam}' 팀에 등록된 PM 연락처와 일치하지 않아요. 이전에 입력한 연락처를 다시 확인해주세요.`,
+            status: 400,
+          };
+        }
+      }
+
       if (name && String(name).trim()) target.name = String(name).trim();
-      target.team = team ? String(team).trim() : '';
-      target.contact = contact ? String(contact).trim() : '';
+      target.team = trimmedTeam;
+      target.contact = trimmedContact;
       return { reservation: target };
     });
 
@@ -304,7 +374,8 @@ app.post('/api/export.csv', (req, res) => {
   const header = ['날짜', '요일', '시간', '강의실', '프로젝트팀명', '사용자', '연락처', '예약등록시각'];
   const rows = sorted.map((r) => {
     const slot = SLOTS[r.slotIndex];
-    const dow = dowLabels[new Date(`${r.date}T00:00:00`).getDay()] + '요일';
+    const [dy, dm, dd] = r.date.split('-').map(Number);
+    const dow = dowLabels[new Date(Date.UTC(dy, dm - 1, dd)).getUTCDay()] + '요일';
     return [
       r.date,
       dow,
@@ -313,7 +384,7 @@ app.post('/api/export.csv', (req, res) => {
       r.team || '',
       r.name || '',
       r.contact || '',
-      r.createdAt ? new Date(r.createdAt).toLocaleString('ko-KR') : '',
+      r.createdAt ? new Date(r.createdAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) : '',
     ];
   });
 

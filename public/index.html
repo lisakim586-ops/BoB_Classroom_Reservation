@@ -1054,3 +1054,36 @@ document.getElementById('overlay').addEventListener('click', (e) => {
 
 </body>
 </html>
+/**
+ * 연락처(전화번호 또는 이메일)를 권한에 따라 렌더링하는 함수
+ * @param {string} contact - 원본 연락처 (전화번호 또는 이메일)
+ * @param {boolean} isAdmin - 운영진 인증 여부
+ * @returns {string} 화면에 표시할 텍스트
+ */
+function getMaskedContact(contact, isAdmin) {
+    if (!contact) return '';
+
+    // 운영진인 경우 원본 반환
+    if (isAdmin) {
+        return contact;
+    }
+
+    // 이메일 마스킹 (예: gildong@example.com -> gil***@example.com)
+    if (contact.includes('@')) {
+        const [id, domain] = contact.split('@');
+        const visibleLength = Math.min(3, id.length);
+        const maskedId = id.substring(0, visibleLength) + '*'.repeat(id.length - visibleLength);
+        return `${maskedId}@${domain}`;
+    }
+
+    // 전화번호 마스킹 (예: 010-1234-5678 -> 010-****-5678 또는 010-1234-****)
+    const cleaned = contact.replace(/[^0-9]/g, '');
+    if (cleaned.length === 11) {
+        return `${cleaned.substring(0, 3)}-****-${cleaned.substring(7)}` ;
+    } else if (cleaned.length === 10) {
+        return `${cleaned.substring(0, 3)}-***-${cleaned.substring(6)}`;
+    }
+
+    // 기본 대체 마스킹
+    return contact.substring(0, 3) + '****';
+}

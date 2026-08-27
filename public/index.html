@@ -839,7 +839,7 @@ function openEditModal(reservation){
   document.getElementById('modalSub').textContent = `${reservation.date} (${fmtDow(reservation.date)}) · ${slot.start}–${slot.end}`;
   document.getElementById('mentorName').value = reservation.name || '';
   document.getElementById('teamName').value = reservation.team || '';
-  document.getElementById('purpose').value = reservation.contact || '';
+  document.getElementById('purpose').value = <td>${getMaskedContact(reservation.contact, window.isAdminAuthenticated)}</td> || '';
   document.getElementById('pinInput').value = '';
   document.getElementById('pinLabel').textContent = '비밀번호 확인 (예약 시 입력한 4자리)';
   document.getElementById('errorMsg').style.display = 'none';

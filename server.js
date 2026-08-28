@@ -23,7 +23,7 @@ const SLOTS = [
   { start: '13:00', end: '15:00', label: '13-15' },
   { start: '15:00', end: '17:00', label: '15-17' },
   { start: '17:00', end: '19:00', label: '17-19' },
-  { start: '19:00', end: '21:00', label: '19-21' },
+  { start: '19:00', end: '22:00', label: '19-22' },
 ];
 
 // ---------- storage (JSON file — mount a Railway volume at DATA_DIR for persistence) ----------
@@ -81,8 +81,9 @@ function bookingHorizonEndStr() {
   return addDaysToDateStr(todayStr(), BOOKING_HORIZON_DAYS);
 }
 function bookingFloorStr() {
-  const today = todayStr();
-  return today > MIN_BOOKING_DATE ? today : MIN_BOOKING_DATE;
+  // 당일 예약은 받지 않으므로, 최소 예약 가능일은 항상 "내일"부터 시작한다
+  const earliestBookable = addDaysToDateStr(todayStr(), 1);
+  return earliestBookable > MIN_BOOKING_DATE ? earliestBookable : MIN_BOOKING_DATE;
 }
 function isWithinBookingHorizon(dateStr) {
   return dateStr >= bookingFloorStr() && dateStr <= bookingHorizonEndStr();
@@ -185,6 +186,9 @@ app.post('/api/reservations', async (req, res) => {
   }
   if (!/^\d{4}$/.test(pin || '')) {
     return res.status(400).json({ error: '비밀번호 4자리를 숫자로 입력해주세요.' });
+  }
+  if (isSameDay(date)) {
+    return res.status(403).json({ error: '당일 예약은 불가능해요. 최소 하루 전에 예약해주세요.' });
   }
   if (!isWithinBookingHorizon(date)) {
     return res.status(400).json({

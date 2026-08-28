@@ -480,6 +480,16 @@
     opacity:0.4;
   }
   .cal-day.beyond-horizon .cal-num{color:var(--ink-soft);}
+  .cal-day.blocked{
+    background:var(--danger-tint);
+    border-color:var(--danger);
+    opacity:1;
+  }
+  .cal-day.blocked .cal-num{
+    color:var(--danger);
+    text-decoration:line-through;
+  }
+  .cal-day.blocked .cal-dot{background:var(--danger) !important;}
   .calendar-legend{
     display:flex;
     align-items:center;
@@ -533,7 +543,7 @@
       <span class="dot dot-empty"></span> 예약 없음
       <span class="dot dot-mid"></span> 일부 예약
       <span class="dot dot-full"></span> 마감 임박/마감
-      <span style="margin-left:7px;">· 흐린 날짜는 아직 접수 전이에요</span>
+      <span style="margin-left:7px;">· 흐린 날짜는 아직 접수 전, 빨간 날짜는 운영진이 막은 날짜예요</span>
     </div>
   </div>
 
@@ -560,7 +570,8 @@
   <div class="notice-box">
     <h3>유의사항</h3>
     <ul>
-      <li>예약 가능 시간은 <strong>09:00–21:00</strong>이며, <strong>2시간 단위</strong>로 예약할 수 있습니다.</li>
+      <li>예약 가능 시간은 <strong>09:00–22:00</strong>이며, 2시간 단위(마지막 타임은 19–22시, 3시간)로 예약할 수 있습니다.</li>
+      <li><strong>당일 예약은 불가능</strong>합니다. 최소 하루 전에 예약해주세요.</li>
       <li>예약 취소 및 정보 수정 시에는 예약 당시 설정한 <strong>비밀번호 4자리</strong>가 필요합니다.</li>
       <li>특정 팀의 강의실 독점을 방지하기 위해, <strong>팀당 한 주(월~일) 최대 5타임</strong>까지 예약이 가능합니다. 다음 주부터 다시 예약할 수 있습니다.</li>
       <li>예약 취소 또는 노쇼가 <strong>누적 3회 이상</strong>인 경우, <strong>최대 2주간 예약이 제한</strong>됩니다.</li>
@@ -571,6 +582,7 @@
       <li>예약은 <strong>당일 기준 2주 앞까지</strong> 접수됩니다. 이후 날짜는 매일 하루씩 자동으로 열립니다.</li>
       <li>본 예약 현황은 모든 사용자에게 실시간으로 공유되며, 20초마다 자동으로 갱신됩니다.</li>
       <li>전체 예약 현황 CSV 내보내기는 <strong>운영진 비밀번호</strong>가 있어야 가능합니다.</li>
+      <li>운영진이 특정 날짜를 <strong>예약 불가</strong>로 지정할 수 있어요. 캘린더에 빨간색으로 표시돼요.</li>
       <li>조정이 필요한 경우 운영진에게 문의해주세요.</li>
     </ul>
   </div>
@@ -620,7 +632,7 @@ const SLOTS = [
   {start:'13:00', end:'15:00', label:'13–15'},
   {start:'15:00', end:'17:00', label:'15–17'},
   {start:'17:00', end:'19:00', label:'17–19'},
-  {start:'19:00', end:'21:00', label:'19–21'},
+  {start:'19:00', end:'22:00', label:'19–22'},
 ];
 const TOTAL_SLOTS_PER_DAY = ROOMS.length * SLOTS.length;
 const WEEKLY_LIMIT_PER_TEAM = 5;
@@ -646,6 +658,10 @@ function isImminentSlot(dateStr, slotIndex){
 function isWithinBookingHorizon(dateStr){
   if(!meta.bookingFloor || !meta.bookingHorizonEnd) return true; // 메타 로딩 전 임시 허용, 서버가 최종 검증함
   return dateStr >= meta.bookingFloor && dateStr <= meta.bookingHorizonEnd;
+}
+
+function isDateBlocked(dateStr){
+  return Array.isArray(meta.blockedDates) && meta.blockedDates.includes(dateStr);
 }
 
 function isSameDayReservation(dateStr){
@@ -731,6 +747,7 @@ function renderCalendar(){
     if(dateStr === selectedDate) cell.className += ' selected';
     if(dateStr === todayStrVal) cell.className += ' today';
     if(!isWithinBookingHorizon(dateStr)) cell.className += ' beyond-horizon';
+    if(isDateBlocked(dateStr)) cell.className += ' blocked';
 
     cell.innerHTML = `<span class="cal-num">${day}</span><span class="cal-dot"></span>`;
     cell.addEventListener('click', () => selectDate(dateStr));
@@ -811,8 +828,16 @@ function renderBoard(){
 }
 
 function openModal(date, room, slotIndex){
+  if(isSameDayReservation(date)){
+    showToast('당일 예약은 불가능해요. 최소 하루 전에 예약해주세요.');
+    return;
+  }
   if(!isWithinBookingHorizon(date)){
     showToast(`예약은 ${meta.bookingFloor || ''}부터 ${meta.bookingHorizonEnd || ''}까지만 가능해요.`);
+    return;
+  }
+  if(isDateBlocked(date)){
+    showToast('운영진이 예약을 막아둔 날짜예요. 다른 날짜를 선택해주세요.');
     return;
   }
   pendingSlot = {mode:'create', date, room, slotIndex};

@@ -352,6 +352,23 @@
     border-color:var(--teal);
   }
   .field textarea{resize:vertical;min-height:56px;}
+  .checkbox-label{
+    display:flex;
+    align-items:flex-start;
+    gap:8px;
+    font-size:13px;
+    color:var(--ink);
+    cursor:pointer;
+    line-height:1.5;
+  }
+  .checkbox-label input[type=checkbox]{
+    width:16px;
+    height:16px;
+    margin-top:1px;
+    flex-shrink:0;
+    accent-color:var(--teal);
+    cursor:pointer;
+  }
   .modal-actions{
     display:flex;
     gap:8px;
@@ -562,7 +579,7 @@
       <span class="dot dot-empty"></span> 예약 없음
       <span class="dot dot-mid"></span> 일부 예약
       <span class="dot dot-full"></span> 마감 임박/마감
-      <span style="margin-left:7px;">· 흐린 날짜는 아직 접수 전, 빨간 날짜는 운영진이 막은 날짜, 주황 날짜는 주말(금요일에만 신청 가능)이에요</span>
+      <span style="margin-left:7px;">· 흐린 날짜는 아직 접수 전, 빨간 날짜는 운영진이 막은 날짜, 주황 날짜는 예약 마감이 지난 주말이에요</span>
     </div>
   </div>
 
@@ -608,7 +625,7 @@
       <li>본 예약 현황은 모든 사용자에게 실시간으로 공유되며, 20초마다 자동으로 갱신됩니다.</li>
       <li>전체 예약 현황 CSV 내보내기는 <strong>운영진 비밀번호</strong>가 있어야 가능합니다.</li>
       <li>운영진이 특정 날짜를 <strong>예약 불가</strong>로 지정할 수 있어요. 캘린더에 빨간색으로 표시돼요.</li>
-      <li><strong>토요일·일요일 예약은 금요일에만</strong> 신청할 수 있어요. 주말 담당자 확인이 어려운 점을 감안한 규칙이에요.</li>
+      <li><strong>토요일·일요일 예약은 그 주 금요일까지</strong> 신청할 수 있어요. 주말 담당자 확인이 어려운 점을 감안한 규칙이에요.</li>
       <li>조정이 필요한 경우 운영진에게 문의해주세요.</li>
     </ul>
   </div>
@@ -638,6 +655,12 @@
     <div class="field">
       <label for="pinInput" id="pinLabel">비밀번호 (숫자 4자리 · 취소·수정 시 필요)</label>
       <input type="password" id="pinInput" inputmode="numeric" maxlength="4" placeholder="예: 1234">
+    </div>
+    <div class="field" id="noticeCheckField">
+      <label class="checkbox-label">
+        <input type="checkbox" id="noticeCheckbox">
+        <span>하단 유의사항을 확인했습니다.</span>
+      </label>
     </div>
     <p class="error-msg" id="errorMsg">이미 예약된 시간이에요. 새로고침 후 다시 시도해주세요.</p>
     <p class="error-msg" id="pinErrorMsg">비밀번호가 일치하지 않아요.</p>
@@ -696,8 +719,19 @@ function isWeekendDate(dateStr){
   return dow === 0 || dow === 6;
 }
 
+function weekendCutoffStr(dateStr){
+  // 그 주말(토/일)의 예약 마감일 = 바로 앞 금요일
+  const d = new Date(dateStr + 'T00:00:00');
+  const dow = d.getDay();
+  if(dow === 6) return addDaysToDateStr(dateStr, -1); // 토요일 -> 하루 전 금요일
+  if(dow === 0) return addDaysToDateStr(dateStr, -2); // 일요일 -> 이틀 전 금요일
+  return null;
+}
+
 function isWeekendLocked(dateStr){
-  return isWeekendDate(dateStr) && !meta.weekendBookingOpen;
+  if(!isWeekendDate(dateStr)) return false;
+  const cutoff = weekendCutoffStr(dateStr);
+  return todayStr() > cutoff;
 }
 
 function isSameDayReservation(dateStr){
@@ -870,7 +904,7 @@ function openModal(date, room, slotIndex){
     return;
   }
   if(isWeekendLocked(date)){
-    showToast('토요일·일요일 예약은 금요일에만 신청할 수 있어요.');
+    showToast('토요일·일요일 예약은 그 주 금요일까지만 신청할 수 있어요.');
     return;
   }
   if(!isWithinBookingHorizon(date)){
@@ -892,6 +926,8 @@ function openModal(date, room, slotIndex){
   document.getElementById('pinLabel').textContent = '비밀번호 (숫자 4자리 · 취소·수정 시 필요)';
   document.getElementById('errorMsg').style.display = 'none';
   document.getElementById('pinErrorMsg').style.display = 'none';
+  document.getElementById('noticeCheckField').style.display = 'block';
+  document.getElementById('noticeCheckbox').checked = false;
   document.getElementById('submitBtn').textContent = '예약하기';
   document.getElementById('overlay').classList.add('open');
   document.getElementById('mentorName').focus();
@@ -909,6 +945,7 @@ function openEditModal(reservation){
   document.getElementById('pinLabel').textContent = '비밀번호 확인 (예약 시 입력한 4자리)';
   document.getElementById('errorMsg').style.display = 'none';
   document.getElementById('pinErrorMsg').style.display = 'none';
+  document.getElementById('noticeCheckField').style.display = 'none';
   document.getElementById('submitBtn').textContent = '수정 완료';
   document.getElementById('overlay').classList.add('open');
   document.getElementById('mentorName').focus();
@@ -953,6 +990,12 @@ async function handleSubmit(){
     document.getElementById('pinErrorMsg').textContent = '비밀번호 4자리를 숫자로 입력해주세요.';
     document.getElementById('pinErrorMsg').style.display = 'block';
     document.getElementById('pinInput').focus();
+    return;
+  }
+
+  if(pendingSlot.mode === 'create' && !document.getElementById('noticeCheckbox').checked){
+    showError('하단 유의사항을 확인 후 체크해주세요.');
+    document.getElementById('noticeCheckbox').focus();
     return;
   }
 

@@ -91,6 +91,17 @@ function isWithinBookingHorizon(dateStr) {
 function isSameDay(dateStr) {
   return dateStr === todayStr();
 }
+function getDow(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=일 ... 5=금 6=토
+}
+function isWeekend(dateStr) {
+  const dow = getDow(dateStr);
+  return dow === 0 || dow === 6;
+}
+function canBookWeekend() {
+  return getDow(todayStr()) === 5; // 오늘이 금요일이어야 주말 예약 신청 가능
+}
 function getWeekStartStr(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
@@ -167,6 +178,7 @@ app.get('/api/reservations', (req, res) => {
       bookingHorizonEnd: bookingHorizonEndStr(),
       today: todayStr(),
       blockedDates: db.blockedDates,
+      weekendBookingOpen: canBookWeekend(),
     },
   });
 });
@@ -189,6 +201,9 @@ app.post('/api/reservations', async (req, res) => {
   }
   if (isSameDay(date)) {
     return res.status(403).json({ error: '당일 예약은 불가능해요. 최소 하루 전에 예약해주세요.' });
+  }
+  if (isWeekend(date) && !canBookWeekend()) {
+    return res.status(403).json({ error: '토요일·일요일 예약은 금요일에만 신청할 수 있어요.' });
   }
   if (!isWithinBookingHorizon(date)) {
     return res.status(400).json({

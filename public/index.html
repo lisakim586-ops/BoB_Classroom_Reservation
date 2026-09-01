@@ -281,6 +281,18 @@
   .notice-box li:last-child{margin-bottom:0;}
   .notice-box strong{color:var(--ink);}
 
+  .notice-highlight{
+    background:var(--danger-tint);
+    border:1.5px solid var(--danger);
+    border-radius:var(--radius);
+    padding:12px 14px;
+    margin-bottom:14px;
+    font-size:13px;
+    line-height:1.8;
+    color:var(--danger);
+  }
+  .notice-highlight strong{color:var(--danger);}
+
   .export-row{
     max-width:480px;
     margin:14px auto 0;
@@ -490,6 +502,13 @@
     text-decoration:line-through;
   }
   .cal-day.blocked .cal-dot{background:var(--danger) !important;}
+  .cal-day.weekend-locked:not(.blocked){
+    background:var(--copper-tint);
+    border-color:var(--copper);
+  }
+  .cal-day.weekend-locked:not(.blocked) .cal-num{
+    color:var(--copper);
+  }
   .calendar-legend{
     display:flex;
     align-items:center;
@@ -543,7 +562,7 @@
       <span class="dot dot-empty"></span> 예약 없음
       <span class="dot dot-mid"></span> 일부 예약
       <span class="dot dot-full"></span> 마감 임박/마감
-      <span style="margin-left:7px;">· 흐린 날짜는 아직 접수 전, 빨간 날짜는 운영진이 막은 날짜예요</span>
+      <span style="margin-left:7px;">· 흐린 날짜는 아직 접수 전, 빨간 날짜는 운영진이 막은 날짜, 주황 날짜는 주말(금요일에만 신청 가능)이에요</span>
     </div>
   </div>
 
@@ -569,6 +588,12 @@
 
   <div class="notice-box">
     <h3>유의사항</h3>
+
+    <div class="notice-highlight">
+      ⚠ <strong>강의실 내 기기(빔프로젝터, PC, 마이크 등) 사용을 금지합니다.</strong><br>
+      ⚠ <strong>사용 후에는 책상·의자 등을 반드시 원래 상태로 깨끗하게 정리해주세요.</strong>
+    </div>
+
     <ul>
       <li>예약 가능 시간은 <strong>09:00–22:00</strong>이며, 2시간 단위(마지막 타임은 19–22시, 3시간)로 예약할 수 있습니다.</li>
       <li><strong>당일 예약은 불가능</strong>합니다. 최소 하루 전에 예약해주세요.</li>
@@ -583,6 +608,7 @@
       <li>본 예약 현황은 모든 사용자에게 실시간으로 공유되며, 20초마다 자동으로 갱신됩니다.</li>
       <li>전체 예약 현황 CSV 내보내기는 <strong>운영진 비밀번호</strong>가 있어야 가능합니다.</li>
       <li>운영진이 특정 날짜를 <strong>예약 불가</strong>로 지정할 수 있어요. 캘린더에 빨간색으로 표시돼요.</li>
+      <li><strong>토요일·일요일 예약은 금요일에만</strong> 신청할 수 있어요. 주말 담당자 확인이 어려운 점을 감안한 규칙이에요.</li>
       <li>조정이 필요한 경우 운영진에게 문의해주세요.</li>
     </ul>
   </div>
@@ -662,6 +688,16 @@ function isWithinBookingHorizon(dateStr){
 
 function isDateBlocked(dateStr){
   return Array.isArray(meta.blockedDates) && meta.blockedDates.includes(dateStr);
+}
+
+function isWeekendDate(dateStr){
+  const d = new Date(dateStr + 'T00:00:00');
+  const dow = d.getDay();
+  return dow === 0 || dow === 6;
+}
+
+function isWeekendLocked(dateStr){
+  return isWeekendDate(dateStr) && !meta.weekendBookingOpen;
 }
 
 function isSameDayReservation(dateStr){
@@ -748,6 +784,7 @@ function renderCalendar(){
     if(dateStr === todayStrVal) cell.className += ' today';
     if(!isWithinBookingHorizon(dateStr)) cell.className += ' beyond-horizon';
     if(isDateBlocked(dateStr)) cell.className += ' blocked';
+    if(isWeekendLocked(dateStr)) cell.className += ' weekend-locked';
 
     cell.innerHTML = `<span class="cal-num">${day}</span><span class="cal-dot"></span>`;
     cell.addEventListener('click', () => selectDate(dateStr));
@@ -830,6 +867,10 @@ function renderBoard(){
 function openModal(date, room, slotIndex){
   if(isSameDayReservation(date)){
     showToast('당일 예약은 불가능해요. 최소 하루 전에 예약해주세요.');
+    return;
+  }
+  if(isWeekendLocked(date)){
+    showToast('토요일·일요일 예약은 금요일에만 신청할 수 있어요.');
     return;
   }
   if(!isWithinBookingHorizon(date)){

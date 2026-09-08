@@ -120,6 +120,14 @@
     border-radius:var(--radius);
     background:#fff;
   }
+  .blocked-form select{
+    font-family:var(--sans);
+    font-size:14px;
+    padding:8px 10px;
+    border:1.5px solid var(--ink);
+    border-radius:var(--radius);
+    background:#fff;
+  }
   .blocked-form button{
     font-family:var(--sans);
     font-weight:600;
@@ -218,9 +226,14 @@
   </header>
 
   <section>
-    <h2>예약 불가 날짜 관리</h2>
+    <h2>예약 불가 날짜/강의실 관리</h2>
     <div class="blocked-form">
       <input type="date" id="blockDateInput">
+      <select id="blockRoomInput">
+        <option value="ALL">전체(5E+5D)</option>
+        <option value="5E">5E만</option>
+        <option value="5D">5D만</option>
+      </select>
       <button id="addBlockBtn">차단 추가</button>
     </div>
     <ul class="blocked-list" id="blockedList"></ul>
@@ -302,27 +315,33 @@ async function loadBlockedDates(){
   }
 }
 
-function renderBlockedDates(dates){
+function roomLabel(room){
+  if(room === 'ALL') return '전체(5E+5D)';
+  return room;
+}
+
+function renderBlockedDates(entries){
   const list = document.getElementById('blockedList');
   list.innerHTML = '';
-  if(dates.length === 0){
+  if(entries.length === 0){
     list.innerHTML = '<li class="empty-note">현재 차단된 날짜가 없어요.</li>';
     return;
   }
-  dates.forEach(date => {
+  entries.forEach(entry => {
     const li = document.createElement('li');
-    li.innerHTML = `<span>${date}</span><button class="remove-btn" data-date="${date}">해제</button>`;
-    li.querySelector('.remove-btn').addEventListener('click', () => removeBlockedDate(date));
+    li.innerHTML = `<span>${entry.date} · ${roomLabel(entry.room)}</span><button class="remove-btn">해제</button>`;
+    li.querySelector('.remove-btn').addEventListener('click', () => removeBlockedDate(entry.date, entry.room));
     list.appendChild(li);
   });
 }
 
 async function addBlockedDate(){
   const date = document.getElementById('blockDateInput').value;
+  const room = document.getElementById('blockRoomInput').value;
   if(!date){ showToast('날짜를 선택해주세요.'); return; }
   try{
-    await adminFetch('/api/admin/blocked-dates', { date, action: 'add' });
-    showToast(`${date} 예약을 막았어요.`);
+    await adminFetch('/api/admin/blocked-dates', { date, room, action: 'add' });
+    showToast(`${date} ${roomLabel(room)} 예약을 막았어요.`);
     document.getElementById('blockDateInput').value = '';
     await loadBlockedDates();
   }catch(e){
@@ -330,10 +349,10 @@ async function addBlockedDate(){
   }
 }
 
-async function removeBlockedDate(date){
+async function removeBlockedDate(date, room){
   try{
-    await adminFetch('/api/admin/blocked-dates', { date, action: 'remove' });
-    showToast(`${date} 차단을 해제했어요.`);
+    await adminFetch('/api/admin/blocked-dates', { date, room, action: 'remove' });
+    showToast(`${date} ${roomLabel(room)} 차단을 해제했어요.`);
     await loadBlockedDates();
   }catch(e){
     showToast(e.message);

@@ -198,6 +198,17 @@
     transition:opacity 0.12s, color 0.12s;
   }
   .slot-cell.empty:hover .plus{opacity:1; color:var(--teal);}
+  .slot-cell.room-blocked{
+    justify-content:center;
+    background:var(--danger-tint);
+    cursor:not-allowed;
+  }
+  .slot-cell.room-blocked .blocked-label{
+    font-family:var(--mono);
+    font-size:12px;
+    font-weight:600;
+    color:var(--danger);
+  }
   .slot-cell.taken{
     background:var(--taken);
     cursor:default;
@@ -624,7 +635,7 @@
       <li>예약은 <strong>당일 기준 2주 앞까지</strong> 접수됩니다. 이후 날짜는 매일 하루씩 자동으로 열립니다.</li>
       <li>본 예약 현황은 모든 사용자에게 실시간으로 공유되며, 20초마다 자동으로 갱신됩니다.</li>
       <li>전체 예약 현황 CSV 내보내기는 <strong>운영진 비밀번호</strong>가 있어야 가능합니다.</li>
-      <li>운영진이 특정 날짜를 <strong>예약 불가</strong>로 지정할 수 있어요. 캘린더에 빨간색으로 표시돼요.</li>
+      <li>운영진이 <strong>특정 날짜, 또는 특정 강의실만</strong> 예약 불가로 지정할 수 있어요. 두 강의실이 모두 막힌 날은 캘린더에 빨간색으로 표시돼요.</li>
       <li><strong>토요일·일요일 예약은 그 주 금요일까지</strong> 신청할 수 있어요. 주말 담당자 확인이 어려운 점을 감안한 규칙이에요.</li>
       <li>조정이 필요한 경우 운영진에게 문의해주세요.</li>
     </ul>
@@ -709,8 +720,14 @@ function isWithinBookingHorizon(dateStr){
   return dateStr >= meta.bookingFloor && dateStr <= meta.bookingHorizonEnd;
 }
 
-function isDateBlocked(dateStr){
-  return Array.isArray(meta.blockedDates) && meta.blockedDates.includes(dateStr);
+function isDateRoomBlocked(dateStr, room){
+  if(!Array.isArray(meta.blockedDates)) return false;
+  return meta.blockedDates.some(b => b.date === dateStr && (b.room === 'ALL' || b.room === room));
+}
+
+function isDateFullyBlocked(dateStr){
+  // 캘린더에 빨간 표시를 할지 여부 — 두 강의실 모두 막혀 있어야 그 날짜 전체가 막힌 것으로 표시
+  return ROOMS.every(room => isDateRoomBlocked(dateStr, room));
 }
 
 function isWeekendDate(dateStr){
@@ -817,7 +834,7 @@ function renderCalendar(){
     if(dateStr === selectedDate) cell.className += ' selected';
     if(dateStr === todayStrVal) cell.className += ' today';
     if(!isWithinBookingHorizon(dateStr)) cell.className += ' beyond-horizon';
-    if(isDateBlocked(dateStr)) cell.className += ' blocked';
+    if(isDateFullyBlocked(dateStr)) cell.className += ' blocked';
     if(isWeekendLocked(dateStr)) cell.className += ' weekend-locked';
 
     cell.innerHTML = `<span class="cal-num">${day}</span><span class="cal-dot"></span>`;
@@ -886,6 +903,12 @@ function renderBoard(){
           e.stopPropagation();
           handleNoShow(existing.id);
         });
+      } else if(isDateRoomBlocked(selectedDate, room)){
+        cell.className = 'slot-cell room-blocked';
+        cell.innerHTML = `<span class="blocked-label">✕ 예약 불가</span>`;
+        cell.addEventListener('click', () => {
+          showToast(`운영진이 ${room} 강의실의 이 날짜 예약을 막아뒀어요.`);
+        });
       } else {
         cell.className = 'slot-cell empty';
         cell.innerHTML = `<span class="plus">+ 예약</span>`;
@@ -911,8 +934,8 @@ function openModal(date, room, slotIndex){
     showToast(`예약은 ${meta.bookingFloor || ''}부터 ${meta.bookingHorizonEnd || ''}까지만 가능해요.`);
     return;
   }
-  if(isDateBlocked(date)){
-    showToast('운영진이 예약을 막아둔 날짜예요. 다른 날짜를 선택해주세요.');
+  if(isDateRoomBlocked(date, room)){
+    showToast(`운영진이 ${room} 강의실의 이 날짜 예약을 막아뒀어요. 다른 강의실이나 날짜를 선택해주세요.`);
     return;
   }
   pendingSlot = {mode:'create', date, room, slotIndex};

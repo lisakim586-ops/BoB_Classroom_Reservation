@@ -41,6 +41,10 @@ function readDb() {
   const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
   // 기존에 배포된 db.json에는 blockedDates가 없을 수 있으므로 없으면 채워준다
   if (!Array.isArray(db.blockedDates)) db.blockedDates = [];
+  // 예전 형식(문자열 날짜 배열)이면 "그 날짜는 모든 강의실 차단"으로 마이그레이션한다
+  db.blockedDates = db.blockedDates.map((entry) =>
+    typeof entry === 'string' ? { date: entry, room: 'ALL' } : entry
+  );
   return db;
 }
 function writeDb(db) {
@@ -165,6 +169,10 @@ function findReservation(reservations, date, room, slotIndex) {
   return reservations.find((r) => r.date === date && r.room === room && r.slotIndex === slotIndex);
 }
 
+function isDateRoomBlocked(blockedDates, date, room) {
+  return blockedDates.some((b) => b.date === date && (b.room === 'ALL' || b.room === room));
+}
+
 // ---------- routes ----------
 
 // list all reservations (board + calendar + client-side rendering use this)
@@ -223,8 +231,8 @@ app.post('/api/reservations', async (req, res) => {
       if (findReservation(db.reservations, date, room, slotIndex)) {
         return { error: '이미 예약된 시간이에요. 새로고침 후 다시 시도해주세요.', status: 409 };
       }
-      if (db.blockedDates.includes(date)) {
-        return { error: '운영진이 예약을 막아둔 날짜예요. 다른 날짜를 선택해주세요.', status: 403 };
+      if (isDateRoomBlocked(db.blockedDates, date, room)) {
+        return { error: `운영진이 ${room} 강의실의 이 날짜 예약을 막아뒀어요. 다른 강의실이나 날짜를 선택해주세요.`, status: 403 };
       }
 
       const trimmedTeam = team ? String(team).trim() : '';
@@ -489,12 +497,16 @@ app.get('/api/blocked-dates', (req, res) => {
   res.json({ blockedDates: db.blockedDates });
 });
 
-// 관리자용: 예약 불가 날짜 추가/해제
+// 관리자용: 예약 불가 날짜/강의실 추가·해제
 app.post('/api/admin/blocked-dates', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   const { date, action } = req.body || {};
+  const room = req.body?.room || 'ALL'; // 'ALL' | '5E' | '5D'
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return res.status(400).json({ error: '날짜 형식이 올바르지 않아요 (YYYY-MM-DD).' });
+  }
+  if (!['ALL', ...ROOMS].includes(room)) {
+    return res.status(400).json({ error: '강의실 값이 올바르지 않아요.' });
   }
   if (!['add', 'remove'].includes(action)) {
     return res.status(400).json({ error: 'action은 add 또는 remove여야 해요.' });
@@ -503,10 +515,11 @@ app.post('/api/admin/blocked-dates', async (req, res) => {
   try {
     const result = await withDb((db) => {
       if (action === 'add') {
-        if (!db.blockedDates.includes(date)) db.blockedDates.push(date);
-        db.blockedDates.sort();
+        const exists = db.blockedDates.some((b) => b.date === date && b.room === room);
+        if (!exists) db.blockedDates.push({ date, room });
+        db.blockedDates.sort((a, b) => (a.date === b.date ? a.room.localeCompare(b.room) : a.date < b.date ? -1 : 1));
       } else {
-        db.blockedDates = db.blockedDates.filter((d) => d !== date);
+        db.blockedDates = db.blockedDates.filter((b) => !(b.date === date && b.room === room));
       }
       return { blockedDates: db.blockedDates };
     });
